@@ -1,33 +1,81 @@
-#include <division.h>
-#include <iostream>
+/*** includes ***/
+#include <unistd.h>
+#include <termios.h>
+#include <ctype.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cerrno>
 
-using namespace std;
+/*** data ***/
+struct termios orig_termios;
 
-static const char *const HEADER = "\nDivider © 2018 Monkey Claps Inc.\n\n";
-static const char *const USAGE = "Usage:\n\tdivider <numerator> <denominator>\n\nDescription:\n\tComputes the result of a fractional division,\n\tand reports both the result and the remainder.\n";
+/*** terminal ***/
+void die(const char* s)
+{
+    perror(s);
+    exit(1);
+}
 
-int main(int argc, const char *argv[]) {
-  Fraction f;
+void disableRawMode()
+{
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == -1)
+        die("tcsetattr");
+}
 
-  cout << HEADER;
+/**
+ * @brief enable raw mode on the terminal
+ */
+void enableRawMode()
+{
+    if (tcgetattr(STDIN_FILENO, &orig_termios) == -1)
+        die("tcgetattr");
+    atexit(disableRawMode);
 
-  // ensure the correct number of parameters are used.
-  if (argc < 3) {
-    cout << USAGE;
-    return 1;
-  }
+    struct termios raw = orig_termios;
+    raw.c_lflag &= ~(
+        ECHO | // no print to terminal
+        ICANON | // not canonical mode
+        IEXTEN | // turn off Ctrl-V
+        ISIG // turn off Ctrl-C, Z
+    );
+    raw.c_iflag &= ~(
+        BRKINT | // a break condition does not cause a SIGINT signal
+        INPCK | // not enable parity check
+        ISTRIP | // not cause the 8th bit of each input byte to be stripped(0)
+        ICRNL | // not translate 'carriage return'('\r') to 'newlines'('\n')
+        IXON // turn off Ctrl-S, Q
+    );
+    raw.c_cflag |= (CS8); // set character size to 8bits per byte
+    raw.c_oflag &= ~(
+        OPOST // not translate '\n' to "\r\n"
+    );
+    raw.c_cc[VMIN] = 0; // mimumum number of bytes of input needed before read()
+    raw.c_cc[VTIME] = 1; // maximum amount of time to wait before read() returns in 100ms
 
-  f.numerator = atoll(argv[1]);
-  f.denominator = atoll(argv[2]);
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1)
+        die("tcsetattr");
+}
 
-  Division d = Division(f);
-  try {
-    DivisionResult r = d.divide();
+/*** init ***/
+int main(int argc, const char *argv[])
+{
+    enableRawMode();
 
-    cout << "Division : " << f.numerator << " / " << f.denominator << " = " << r.division << "\n";
-    cout << "Remainder: " << f.numerator << " % " << f.denominator << " = " << r.remainder << "\n";
-  } catch (DivisionByZero) {
-    cout << "Can not divide by zero, Homer. Sober up!\n";
-  }
-  return 0;
+    while (true) {
+        char c = '\0';
+        if (
+            read(STDIN_FILENO, &c, 1) == -1 &&
+            errno != EAGAIN // errno will be set EAGAIN on timeout in Cygwin
+        )
+            die("read");
+
+        if (iscntrl(c)) { // check c whether if it's printable
+            printf("%d\r\n", c);
+        } else {
+            printf("%d ('%c')\r\n", c, c);
+        }
+        if (c == 'q') break;
+    }
+
+    return 0;
 }
